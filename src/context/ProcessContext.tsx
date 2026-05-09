@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { osEvents } from '../core/events/EventBus';
 import { WorkspaceManager } from '../core/workspace/WorkspaceManager';
+import { AppRegistry } from '../core/registry/AppRegistry';
 
 export type WindowState = 'normal' | 'maximized' | 'snapped-left' | 'snapped-right' | 'fullscreen';
 
@@ -39,8 +40,33 @@ interface ProcessContextType {
 const ProcessContext = createContext<ProcessContextType | undefined>(undefined);
 
 export const ProcessProvider = ({ children }: { children: ReactNode }) => {
-  const [processes, setProcesses] = useState<Process[]>([]);
+  const [processes, setProcesses] = useState<Process[]>(() => {
+    try {
+      const saved = localStorage.getItem('webos_processes');
+      if (saved) {
+        const parsed = JSON.parse(saved) as Process[];
+        const validWorkspaces = new Set(WorkspaceManager.getWorkspaces().map(w => w.id));
+        const defaultWorkspace = WorkspaceManager.getActiveWorkspaceId();
+
+        return parsed
+          .filter(p => AppRegistry.getApp(p.appId)) // ensure app exists
+          .map(p => ({
+            ...p,
+            workspaceId: validWorkspaces.has(p.workspaceId) ? p.workspaceId : defaultWorkspace
+          }));
+      }
+    } catch (e) {
+      console.error('Failed to load processes from localStorage', e);
+    }
+    return [];
+  });
+  
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>(WorkspaceManager.getActiveWorkspaceId());
+
+  // Save processes to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem('webos_processes', JSON.stringify(processes));
+  }, [processes]);
 
   // Listen for workspace changes
   useEffect(() => {
@@ -55,9 +81,8 @@ export const ProcessProvider = ({ children }: { children: ReactNode }) => {
 
   const openProcess = (id: string, name: string, args?: Record<string, any>) => {
     const appId = id.split('-')[0];
-    const isMultiInstance = ['terminal', 'explorer', 'editor'].includes(appId);
     let processId = id;
-    if (isMultiInstance && !id.includes('-')) {
+    if (!id.includes('-')) {
       processId = `${appId}-${Date.now()}`;
     }
 

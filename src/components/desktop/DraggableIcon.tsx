@@ -8,9 +8,14 @@ interface DraggableIconProps {
   name: string;
   onDoubleClick: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
+  isSelected?: boolean;
+  onClick?: (e: React.MouseEvent) => void;
+  onPointerDown?: (e: React.PointerEvent) => void;
+  selectedVfsPaths?: string[]; // passed when multiple are selected
+  selectedAppIds?: string[]; // passed when multiple apps are selected
 }
 
-export const DraggableIcon = ({ node, icon, name, onDoubleClick, onContextMenu }: DraggableIconProps) => {
+export const DraggableIcon = ({ node, icon, name, onDoubleClick, onContextMenu, isSelected, onClick, onPointerDown, selectedVfsPaths = [], selectedAppIds = [] }: DraggableIconProps) => {
   const [pos, setPos] = useState({ x: node.col * DesktopLayoutManager.GRID_SIZE, y: node.row * DesktopLayoutManager.GRID_SIZE });
 
   // Sync position if layout changes externally
@@ -27,10 +32,34 @@ export const DraggableIcon = ({ node, icon, name, onDoubleClick, onContextMenu }
     const offsetY = e.clientY - rect.top;
 
     let payload: DragPayload;
+    
+    // Check if the current node is part of the selection. If not, we just drag this single node.
+    let isNodeSelected = false;
     if (node.type === 'vfs') {
+      isNodeSelected = selectedVfsPaths.includes((node as DesktopVfsNode).path);
+    } else {
+      isNodeSelected = selectedAppIds.includes((node as DesktopAppNode).id);
+    }
+
+    const dragVfsPaths = isNodeSelected ? selectedVfsPaths : (node.type === 'vfs' ? [(node as DesktopVfsNode).path] : []);
+    const dragAppIds = isNodeSelected ? selectedAppIds : (node.type === 'app' ? [(node as DesktopAppNode).id] : []);
+    
+    const totalItems = dragVfsPaths.length + dragAppIds.length;
+
+    if (dragVfsPaths.length > 0 && dragAppIds.length > 0) {
+      payload = {
+        type: 'mixed',
+        sourcePaths: dragVfsPaths,
+        appIds: dragAppIds,
+        sourceContext: 'desktop',
+        offsetX,
+        offsetY
+      };
+    } else if (dragVfsPaths.length > 0) {
       payload = {
         type: 'vfs',
-        sourcePath: (node as DesktopVfsNode).path,
+        sourcePath: dragVfsPaths[0],
+        sourcePaths: dragVfsPaths,
         sourceContext: 'desktop',
         offsetX,
         offsetY
@@ -38,11 +67,23 @@ export const DraggableIcon = ({ node, icon, name, onDoubleClick, onContextMenu }
     } else {
       payload = {
         type: 'app',
-        appId: (node as DesktopAppNode).id,
+        appId: dragAppIds[0],
+        appIds: dragAppIds,
         sourceContext: 'desktop',
         offsetX,
         offsetY
       };
+    }
+
+    if (totalItems > 1) {
+      const badge = document.createElement('div');
+      badge.className = 'bg-blue-500 text-white px-2 py-1 rounded text-xs font-bold fixed top-[-1000px] left-[-1000px] z-50';
+      badge.textContent = `${totalItems} items`;
+      document.body.appendChild(badge);
+      e.dataTransfer.setDragImage(badge, 0, 0);
+      setTimeout(() => {
+        if (document.body.contains(badge)) document.body.removeChild(badge);
+      }, 100);
     }
     
     e.dataTransfer.setData(DRAG_MIME_TYPE, JSON.stringify(payload));
@@ -55,12 +96,21 @@ export const DraggableIcon = ({ node, icon, name, onDoubleClick, onContextMenu }
   return (
     <div
       draggable
+      data-id={node.id}
       onDragStart={handleDragStart}
-      className={`absolute flex flex-col items-center justify-center hover:bg-white/10 rounded-lg cursor-pointer transition-transform group select-none z-0`}
+      className={`desktop-icon absolute flex flex-col items-center justify-center rounded-lg cursor-pointer transition-transform group select-none z-0
+        ${isSelected ? 'bg-blue-500/40 border border-blue-400/50' : 'hover:bg-white/10 border border-transparent'}
+      `}
       style={{
         width: DesktopLayoutManager.GRID_SIZE,
         height: DesktopLayoutManager.GRID_SIZE,
         transform: `translate3d(${pos.x}px, ${pos.y}px, 0)`
+      }}
+      onClick={(e) => {
+        if (onClick) onClick(e);
+      }}
+      onPointerDown={(e) => {
+        if (onPointerDown) onPointerDown(e);
       }}
       onDoubleClick={(e) => {
         e.stopPropagation();
