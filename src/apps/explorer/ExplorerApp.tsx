@@ -10,6 +10,7 @@ import type { MenuItem } from '../../core/contextmenu/types';
 import { type DragPayload, DRAG_MIME_TYPE } from '../../core/events/DragPayload';
 import { AppRegistry } from '../../core/registry/AppRegistry';
 import { ClipboardManager } from '../../core/clipboard/ClipboardManager';
+import { OperationJournal } from '../../core/fs/OperationJournal';
 
 const getIconForFile = (name: string) => {
   if (name.endsWith('.txt')) return <FileText className="w-12 h-12 text-slate-300" />;
@@ -188,6 +189,21 @@ export const ExplorerApp = () => {
       action: () => handleBatchDelete(targetPaths)
     });
 
+    items.push({
+      id: `explorer-hard-delete-${node.id}`,
+      label: isSingle ? 'Permanently Delete' : `Permanently Delete ${targetPaths.length} items`,
+      icon: <Trash2 className="w-4 h-4 text-red-700" />,
+      action: async () => {
+        try {
+          for (const path of targetPaths) {
+            await vfs.rm(path, '/', true, true);
+          }
+        } catch (err) {
+          console.error('Failed to permanently delete', err);
+        }
+      }
+    });
+
     osEvents.emit('contextmenu:open', {
       x: e.clientX,
       y: e.clientY,
@@ -205,24 +221,12 @@ export const ExplorerApp = () => {
         const destPath = currentPath === '/' ? `/${fileName}` : `${currentPath}/${fileName}`;
         
         if (clipboard.action === 'copy') {
-          if (src === destPath) {
-            // Copying to same directory -> append _copy
-            const nameParts = fileName.split('.');
-            let newName = '';
-            if (nameParts.length > 1 && !src.endsWith('/')) {
-              const ext = nameParts.pop();
-              newName = `${nameParts.join('.')}_copy.${ext}`;
-            } else {
-              newName = `${fileName}_copy`;
-            }
-            const newDestPath = currentPath === '/' ? `/${newName}` : `${currentPath}/${newName}`;
-            await vfs.cp(src, newDestPath, '/');
-          } else {
-            await vfs.cp(src, destPath, '/');
-          }
+          // The cp function uses autoRename=true (6th argument)
+          await vfs.cp(src, destPath, '/', true, false, true);
         } else if (clipboard.action === 'cut') {
           if (src !== destPath && !destPath.startsWith(src + '/')) {
-            await vfs.mv(src, destPath, '/');
+            // The mv function uses autoRename=true (5th argument)
+            await vfs.mv(src, destPath, '/', false, true);
           }
         }
       }
@@ -294,33 +298,47 @@ export const ExplorerApp = () => {
   };
 
   const handleKeyDown = async (e: React.KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
       e.preventDefault();
+      e.stopPropagation();
       selectAll();
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
+      e.stopPropagation();
       if (selectedPaths.size > 0) {
+        const hardDelete = e.shiftKey;
         try {
           for (const path of Array.from(selectedPaths)) {
-            await vfs.rm(path, '/');
+            await vfs.rm(path, '/', true, hardDelete);
           }
         } catch (err) {
           console.error('Failed to delete', err);
         }
       }
-    } else if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
       e.preventDefault();
+      e.stopPropagation();
       if (selectedPaths.size > 0) {
         ClipboardManager.setClipboard('copy', Array.from(selectedPaths));
       }
-    } else if ((e.ctrlKey || e.metaKey) && e.key === 'x') {
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
       e.preventDefault();
+      e.stopPropagation();
       if (selectedPaths.size > 0) {
         ClipboardManager.setClipboard('cut', Array.from(selectedPaths));
       }
-    } else if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
       e.preventDefault();
+      e.stopPropagation();
       handlePaste();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.shiftKey) {
+        await OperationJournal.redo();
+      } else {
+        await OperationJournal.undo();
+      }
     }
   };
 

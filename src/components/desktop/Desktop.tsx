@@ -11,6 +11,7 @@ import { vfs } from '../../core/fs/FileSystem';
 import type { MenuItem } from '../../core/contextmenu/types';
 import { type DragPayload, DRAG_MIME_TYPE } from '../../core/events/DragPayload';
 import { ClipboardManager } from '../../core/clipboard/ClipboardManager';
+import { OperationJournal } from '../../core/fs/OperationJournal';
 
 export const Desktop = () => {
   const { processes, openProcess } = useProcesses();
@@ -42,22 +43,12 @@ export const Desktop = () => {
         const destPath = `/home/desktop/${fileName}`;
         
         if (clipboard.action === 'copy') {
-          if (src === destPath) {
-            const nameParts = fileName.split('.');
-            let newName = '';
-            if (nameParts.length > 1 && !src.endsWith('/')) {
-              const ext = nameParts.pop();
-              newName = `${nameParts.join('.')}_copy.${ext}`;
-            } else {
-              newName = `${fileName}_copy`;
-            }
-            await vfs.cp(src, `/home/desktop/${newName}`, '/');
-          } else {
-            await vfs.cp(src, destPath, '/');
-          }
+          // autoRename = true
+          await vfs.cp(src, destPath, '/', true, false, true);
         } else if (clipboard.action === 'cut') {
           if (src !== destPath) {
-            await vfs.mv(src, destPath, '/');
+            // autoRename = true
+            await vfs.mv(src, destPath, '/', false, true);
           }
         }
       }
@@ -183,6 +174,21 @@ export const Desktop = () => {
       }
     });
 
+    items.push({
+      id: `desktop-hard-delete-${node.id}`,
+      label: isSingle ? 'Permanently Delete' : `Permanently Delete ${targetPaths.length} items`,
+      icon: <Trash2 className="w-4 h-4 text-red-700" />,
+      action: async () => {
+        try {
+          for (const p of targetPaths) {
+            await vfs.rm(p, '/', true, true);
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    });
+
     osEvents.emit('contextmenu:open', { x: e.clientX, y: e.clientY, items });
   };
 
@@ -235,34 +241,42 @@ export const Desktop = () => {
   };
 
   const handleKeyDown = async (e: React.KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
       e.preventDefault();
       setSelectedIds(new Set(layoutNodes.map(n => n.id)));
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
+      const hardDelete = e.shiftKey;
       for (const id of Array.from(selectedIds)) {
         const node = layoutNodes.find(n => n.id === id);
         if (node && node.type === 'vfs') {
-           await vfs.rm((node as DesktopVfsNode).path, '/');
+           await vfs.rm((node as DesktopVfsNode).path, '/', true, hardDelete);
         }
       }
-    } else if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
       e.preventDefault();
       const paths = Array.from(selectedIds)
         .map(id => layoutNodes.find(n => n.id === id))
         .filter((n): n is DesktopVfsNode => n?.type === 'vfs')
         .map(n => n.path);
       if (paths.length > 0) ClipboardManager.setClipboard('copy', paths);
-    } else if ((e.ctrlKey || e.metaKey) && e.key === 'x') {
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
       e.preventDefault();
       const paths = Array.from(selectedIds)
         .map(id => layoutNodes.find(n => n.id === id))
         .filter((n): n is DesktopVfsNode => n?.type === 'vfs')
         .map(n => n.path);
       if (paths.length > 0) ClipboardManager.setClipboard('cut', paths);
-    } else if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
       e.preventDefault();
       handlePaste();
+    } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      if (e.shiftKey) {
+        await OperationJournal.redo();
+      } else {
+        await OperationJournal.undo();
+      }
     }
   };
 

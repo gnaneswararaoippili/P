@@ -17,6 +17,16 @@ class SettingsManagerImpl {
 
   constructor() {
     this.settings = { ...DEFAULT_SETTINGS };
+    try {
+      const stored = localStorage.getItem('webos-settings');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        this.settings = { ...DEFAULT_SETTINGS, ...parsed };
+      }
+      this.isInitialized = true;
+    } catch (err) {
+      console.warn("Failed to load settings synchronously:", err);
+    }
   }
 
   async init() {
@@ -33,6 +43,7 @@ class SettingsManagerImpl {
     }
     
     this.isInitialized = true;
+    osEvents.emit('settings:loaded', this.settings);
   }
 
   get<K extends keyof SystemSettings>(key: K): SystemSettings[K] {
