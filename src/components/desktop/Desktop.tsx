@@ -12,6 +12,8 @@ import type { MenuItem } from '../../core/contextmenu/types';
 import { type DragPayload, DRAG_MIME_TYPE } from '../../core/events/DragPayload';
 import { ClipboardManager } from '../../core/clipboard/ClipboardManager';
 import { OperationJournal } from '../../core/fs/OperationJournal';
+import { SidebarManager } from '../../core/explorer/SidebarManager';
+import { Star } from 'lucide-react';
 
 export const Desktop = () => {
   const { processes, openProcess } = useProcesses();
@@ -138,6 +140,23 @@ export const Desktop = () => {
           openProcess('explorer', 'File Explorer', { targetPath: node.path });
         }
       });
+
+      const isFavorite = SidebarManager.getFavorites().some(f => f.targetPath === node.path);
+      items.push({
+        id: `desktop-fav-${node.id}`,
+        label: isFavorite ? 'Unpin from Favorites' : 'Pin to Favorites',
+        icon: <Star className="w-4 h-4" />,
+        action: () => {
+          if (isFavorite) {
+            const fav = SidebarManager.getFavorites().find(f => f.targetPath === node.path);
+            if (fav) SidebarManager.removeFavorite(fav.id);
+          } else {
+            const name = node.path.split('/').pop() || 'Folder';
+            SidebarManager.addFavorite(name, node.path);
+          }
+        }
+      });
+
       items.push({ id: `desktop-sep-1-${node.id}`, separator: true });
     }
 
@@ -355,22 +374,48 @@ export const Desktop = () => {
       onContextMenu={handleContextMenu}
       onPointerDown={handleBackgroundPointerDown}
       onDragOver={(e) => {
-        if (e.dataTransfer.types.includes(DRAG_MIME_TYPE)) {
+        const types = e.dataTransfer?.types ? Array.from(e.dataTransfer.types) : [];
+        if (types.includes(DRAG_MIME_TYPE) || types.includes('Files')) {
           e.preventDefault();
-          e.dataTransfer.dropEffect = 'move';
+          e.dataTransfer.dropEffect = 'copy';
         }
       }}
       onDrop={async (e) => {
+        e.preventDefault();
+        if (!e.dataTransfer) return;
         try {
+          const iconX = e.clientX - (DesktopLayoutManager.GRID_SIZE / 2);
+          const iconY = e.clientY - (DesktopLayoutManager.GRID_SIZE / 2);
+          const col = Math.round(iconX / DesktopLayoutManager.GRID_SIZE);
+          const row = Math.round(iconY / DesktopLayoutManager.GRID_SIZE);
+
+          // Handle native OS files being dropped
+          if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            const files = Array.from(e.dataTransfer.files);
+            for (let i = 0; i < files.length; i++) {
+              const file = files[i];
+              if (file.size > 5 * 1024 * 1024) { // 5MB limit
+                console.warn(`File ${file.name} is too large (>${file.size} bytes). Skipping.`);
+                continue;
+              }
+              const destPath = `/home/desktop/${file.name}`;
+              const content = await file.text();
+              await vfs.writeFile(destPath, content, '/');
+              const newId = `vfs-${destPath}`;
+              DesktopLayoutManager.updatePosition(newId, col + (i % 3), row + Math.floor(i / 3));
+            }
+            return;
+          }
+
           const raw = e.dataTransfer.getData(DRAG_MIME_TYPE);
           if (!raw) return;
           const payload: DragPayload = JSON.parse(raw);
           
-          const iconX = e.clientX - (payload.offsetX || DesktopLayoutManager.GRID_SIZE / 2);
-          const iconY = e.clientY - (payload.offsetY || DesktopLayoutManager.GRID_SIZE / 2);
+          const plIconX = e.clientX - (payload.offsetX || DesktopLayoutManager.GRID_SIZE / 2);
+          const plIconY = e.clientY - (payload.offsetY || DesktopLayoutManager.GRID_SIZE / 2);
 
-          const col = Math.round(iconX / DesktopLayoutManager.GRID_SIZE);
-          const row = Math.round(iconY / DesktopLayoutManager.GRID_SIZE);
+          const plCol = Math.round(plIconX / DesktopLayoutManager.GRID_SIZE);
+          const plRow = Math.round(plIconY / DesktopLayoutManager.GRID_SIZE);
 
           const vfsPaths = payload.sourcePaths || (payload.sourcePath ? [payload.sourcePath] : []);
           const appIds = payload.appIds || (payload.appId ? [payload.appId] : []);
@@ -382,8 +427,8 @@ export const Desktop = () => {
             const fileName = src.split('/').pop() || '';
             const destPath = `/home/desktop/${fileName}`;
             
-            const offsetCol = col + (currentIndex % 3);
-            const offsetRow = row + Math.floor(currentIndex / 3);
+            const offsetCol = plCol + (currentIndex % 3);
+            const offsetRow = plRow + Math.floor(currentIndex / 3);
             currentIndex++;
             
             if (src === destPath) {
@@ -404,8 +449,8 @@ export const Desktop = () => {
 
           // Process App items
           for (const appId of appIds) {
-            const offsetCol = col + (currentIndex % 3);
-            const offsetRow = row + Math.floor(currentIndex / 3);
+            const offsetCol = plCol + (currentIndex % 3);
+            const offsetRow = plRow + Math.floor(currentIndex / 3);
             currentIndex++;
             DesktopLayoutManager.updatePosition(appId, offsetCol, offsetRow);
           }

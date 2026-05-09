@@ -49,7 +49,7 @@ export const ProcessProvider = ({ children }: { children: ReactNode }) => {
         const defaultWorkspace = WorkspaceManager.getActiveWorkspaceId();
 
         return parsed
-          .filter(p => AppRegistry.getApp(p.appId)) // ensure app exists
+          .filter(p => AppRegistry.getApp(p.appId))
           .map(p => ({
             ...p,
             workspaceId: validWorkspaces.has(p.workspaceId) ? p.workspaceId : defaultWorkspace

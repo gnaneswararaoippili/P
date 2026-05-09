@@ -55,6 +55,12 @@ export class FileSystem {
         if (homeDir.type === 'directory') {
           this._mkdirSync('guest', homeDir);
           this._mkdirSync('desktop', homeDir);
+          
+          const guestDir = this._resolveSync('/home/guest', '/');
+          if (guestDir.type === 'directory') {
+            this._mkdirSync('documents', guestDir);
+            this._mkdirSync('pictures', guestDir);
+          }
         }
       }
       
@@ -73,6 +79,24 @@ export class FileSystem {
           this._mkdirSync('desktop', homeDir);
         }
       }
+
+      // Ensure /.trash exists
+      try {
+        this._resolveSync('/.trash', '/');
+      } catch {
+        this._mkdirSync('.trash', this.root);
+      }
+
+      // Ensure /home/guest/documents and pictures exist
+      try {
+        const guestDir = this._resolveSync('/home/guest', '/');
+        if (guestDir.type === 'directory') {
+          if (!guestDir.children.has('documents')) this._mkdirSync('documents', guestDir);
+          if (!guestDir.children.has('pictures')) this._mkdirSync('pictures', guestDir);
+        }
+      } catch {
+        // guest doesn't exist? should be fine
+      }
       
       await this._triggerSave();
     } catch (err) {
@@ -83,6 +107,12 @@ export class FileSystem {
       if (homeDir.type === 'directory') {
         this._mkdirSync('guest', homeDir);
         this._mkdirSync('desktop', homeDir);
+        
+        const guestDir = this._resolveSync('/home/guest', '/');
+        if (guestDir.type === 'directory') {
+          this._mkdirSync('documents', guestDir);
+          this._mkdirSync('pictures', guestDir);
+        }
       }
       await this._triggerSave();
     }

@@ -11,6 +11,9 @@ import { type DragPayload, DRAG_MIME_TYPE } from '../../core/events/DragPayload'
 import { AppRegistry } from '../../core/registry/AppRegistry';
 import { ClipboardManager } from '../../core/clipboard/ClipboardManager';
 import { OperationJournal } from '../../core/fs/OperationJournal';
+import { SidebarManager, getSidebarIcon } from '../../core/explorer/SidebarManager';
+import type { SidebarItem } from '../../core/explorer/SidebarManager';
+import { Star } from 'lucide-react';
 
 const getIconForFile = (name: string) => {
   if (name.endsWith('.txt')) return <FileText className="w-12 h-12 text-slate-300" />;
@@ -38,9 +41,34 @@ export const ExplorerApp = () => {
 
   const { selectedPaths, handlePointerDown, clearSelection, selectAll, setSelectedPaths } = useSelectionEngine(nodes, currentPath);
 
-  // Marquee Selection State
   const containerRef = useRef<HTMLDivElement>(null);
   const [marquee, setMarquee] = useState<{ startX: number; startY: number; currentX: number; currentY: number } | null>(null);
+
+  // Sidebar State
+  const [favorites, setFavorites] = useState<SidebarItem[]>([]);
+  const [mounts, setMounts] = useState<SidebarItem[]>([]);
+  const [system, setSystem] = useState<SidebarItem[]>([]);
+  const [recents, setRecents] = useState<SidebarItem[]>([]);
+
+  useEffect(() => {
+    const handleSidebarUpdate = (data: any) => {
+      setFavorites(data.favorites);
+      setMounts(data.mounts);
+      setSystem(data.system);
+      setRecents(data.recents);
+    };
+
+    // Initial load
+    setFavorites(SidebarManager.getFavorites());
+    setMounts(SidebarManager.getMounts());
+    setSystem(SidebarManager.getSystem());
+    setRecents(SidebarManager.getRecentItems());
+
+    osEvents.on('sidebar:updated', handleSidebarUpdate);
+    return () => {
+      osEvents.off('sidebar:updated', handleSidebarUpdate);
+    };
+  }, []);
 
   // Sync VFS nodes when path changes
   useEffect(() => {
@@ -98,6 +126,13 @@ export const ExplorerApp = () => {
     }
   };
 
+  // Log navigation to recents
+  useEffect(() => {
+    if (currentPath !== '/') {
+      SidebarManager.logVisit(currentPath);
+    }
+  }, [currentPath]);
+
   const handleContextMenu = (e: React.MouseEvent, node: VFSNode) => {
     e.preventDefault();
     e.stopPropagation();
@@ -122,7 +157,9 @@ export const ExplorerApp = () => {
       ClipboardManager.setClipboard('cut', paths);
     };
 
-    const handleBatchDelete = async (paths: string[]) => {
+
+
+  const handleBatchDelete = async (paths: string[]) => {
       try {
         for (const path of paths) {
           await vfs.rm(path, '/');
@@ -162,6 +199,23 @@ export const ExplorerApp = () => {
         label: 'Edit with Text Editor',
         icon: <Edit2 className="w-4 h-4" />,
         action: () => openProcess(`editor-${node.id}`, `Editor - ${node.name}`, { filePath: fullPath })
+      });
+    }
+
+    if (isSingle && node.type === 'directory') {
+      const isFavorite = favorites.some(f => f.targetPath === fullPath);
+      items.push({
+        id: `explorer-fav-${node.id}`,
+        label: isFavorite ? 'Unpin from Favorites' : 'Pin to Favorites',
+        icon: <Star className="w-4 h-4" />,
+        action: () => {
+          if (isFavorite) {
+            const fav = favorites.find(f => f.targetPath === fullPath);
+            if (fav) SidebarManager.removeFavorite(fav.id);
+          } else {
+            SidebarManager.addFavorite(node.name, fullPath);
+          }
+        }
       });
     }
 
@@ -295,6 +349,43 @@ export const ExplorerApp = () => {
         items
       });
     }
+  };
+
+  const handleSidebarContextMenu = (e: React.MouseEvent, item: SidebarItem) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const items: MenuItem[] = [];
+
+    if (item.type === 'favorite') {
+      items.push({
+        id: `sidebar-unpin-${item.id}`,
+        label: 'Unpin from Favorites',
+        icon: <Star className="w-4 h-4" />,
+        action: () => SidebarManager.removeFavorite(item.id)
+      });
+    } else if (item.type === 'recent') {
+      items.push({
+        id: `sidebar-rm-recent-${item.id}`,
+        label: 'Remove from Recent',
+        icon: <Trash2 className="w-4 h-4 text-red-500" />,
+        action: () => SidebarManager.removeRecent(item.targetPath)
+      });
+      items.push({
+        id: `sidebar-clear-recent`,
+        label: 'Clear Recent Locations',
+        icon: <Trash2 className="w-4 h-4 text-red-500" />,
+        action: () => SidebarManager.clearRecents()
+      });
+    } else {
+      return;
+    }
+
+    osEvents.emit('contextmenu:open', {
+      x: e.clientX,
+      y: e.clientY,
+      items
+    });
   };
 
   const handleKeyDown = async (e: React.KeyboardEvent) => {
@@ -471,28 +562,103 @@ export const ExplorerApp = () => {
         </div>
       </div>
 
-      {/* Main Content Area */}
-      <div 
-        ref={containerRef}
-        className={`relative flex-1 overflow-auto p-4 transition-colors ${isDragOver ? 'bg-blue-500/10' : ''}`}
+      {/* Main Layout: Sidebar + Content */}
+      <div className="flex-1 flex overflow-hidden">
+        
+        {/* Sidebar */}
+        <div className="w-48 flex-shrink-0 bg-slate-900/50 border-r border-white/5 flex flex-col overflow-y-auto overflow-x-hidden p-2 select-none">
+          {/* Favorites */}
+          <div className="mb-4">
+            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2">Favorites</h3>
+            {favorites.map(item => (
+              <div 
+                key={item.id}
+                onClick={() => navigateTo(item.targetPath)}
+                onContextMenu={(e) => handleSidebarContextMenu(e, item)}
+                className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors ${currentPath === item.targetPath ? 'bg-blue-500/20 text-blue-400' : 'hover:bg-white/10 text-slate-300'}`}
+              >
+                {getSidebarIcon(item.iconName)}
+                <span className="truncate">{item.label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Mounts */}
+          <div className="mb-4">
+            <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2">Locations</h3>
+            {[...mounts, ...system].map(item => (
+              <div 
+                key={item.id}
+                onClick={() => navigateTo(item.targetPath)}
+                onContextMenu={(e) => handleSidebarContextMenu(e, item)}
+                className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors ${currentPath === item.targetPath ? 'bg-blue-500/20 text-blue-400' : 'hover:bg-white/10 text-slate-300'}`}
+              >
+                {getSidebarIcon(item.iconName)}
+                <span className="truncate">{item.label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Recents */}
+          {recents.length > 0 && (
+            <div className="mb-4">
+              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 px-2">Recent</h3>
+              {recents.map(item => (
+                <div 
+                  key={item.id}
+                  onClick={() => navigateTo(item.targetPath)}
+                  onContextMenu={(e) => handleSidebarContextMenu(e, item)}
+                  className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors ${currentPath === item.targetPath ? 'bg-blue-500/20 text-blue-400' : 'hover:bg-white/10 text-slate-300'}`}
+                >
+                  {getSidebarIcon(item.iconName)}
+                  <span className="truncate">{item.label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Main Content Area */}
+        <div 
+          ref={containerRef}
+          className={`relative flex-1 overflow-auto p-4 transition-colors ${isDragOver ? 'bg-blue-500/10' : ''}`}
         onContextMenu={handleBackgroundContextMenu}
         onPointerDown={handleBackgroundPointerDown}
         onDragOver={(e) => {
-          if (e.dataTransfer.types.includes(DRAG_MIME_TYPE)) {
+          const types = e.dataTransfer?.types ? Array.from(e.dataTransfer.types) : [];
+          if (types.includes(DRAG_MIME_TYPE) || types.includes('Files')) {
             e.preventDefault(); // allow drop
-            e.dataTransfer.dropEffect = 'move';
+            e.dataTransfer.dropEffect = 'copy';
             setIsDragOver(true);
           }
         }}
         onDragLeave={() => setIsDragOver(false)}
         onDrop={async (e) => {
+          e.preventDefault();
           setIsDragOver(false);
+          if (!e.dataTransfer) return;
           try {
+            // Handle native OS files being dropped
+            if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+              const files = Array.from(e.dataTransfer.files);
+              for (const file of files) {
+                if (file.size > 5 * 1024 * 1024) { // 5MB limit
+                  console.warn(`File ${file.name} is too large. Skipping.`);
+                  continue;
+                }
+                const destPath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`;
+                const content = await file.text();
+                await vfs.writeFile(destPath, content, '/');
+              }
+              return;
+            }
+
+            // Handle internal WebOS drag and drop
             const raw = e.dataTransfer.getData(DRAG_MIME_TYPE);
             if (!raw) return;
             const payload: DragPayload = JSON.parse(raw);
             
-            if (payload.type === 'vfs') {
+            if (payload.type === 'vfs' || payload.type === 'mixed') {
               const paths = payload.sourcePaths || (payload.sourcePath ? [payload.sourcePath] : []);
               for (const src of paths) {
                 const fileName = src.split('/').pop() || '';
@@ -500,7 +666,7 @@ export const ExplorerApp = () => {
                 
                 // Only move if it's changing directories
                 if (src !== destPath && !destPath.startsWith(src + '/')) {
-                  await vfs.mv(src, destPath, '/');
+                  await vfs.mv(src, destPath, '/', false, true);
                 }
               }
             }
@@ -514,7 +680,7 @@ export const ExplorerApp = () => {
             Error: {error}
           </div>
         ) : (
-          <div className="grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-4 auto-rows-min">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(5rem,1fr))] gap-4 auto-rows-min">
             {nodes.length === 0 ? (
               <div className="col-span-full text-center text-slate-500 mt-10">
                 This folder is empty.
@@ -557,7 +723,8 @@ export const ExplorerApp = () => {
                     e.dataTransfer.effectAllowed = 'move';
                   }}
                   onDragOver={(e) => {
-                    if (node.type === 'directory' && e.dataTransfer.types.includes(DRAG_MIME_TYPE)) {
+                    const types = e.dataTransfer?.types ? Array.from(e.dataTransfer.types) : [];
+                    if (node.type === 'directory' && types.includes(DRAG_MIME_TYPE)) {
                       e.preventDefault();
                       e.stopPropagation();
                       e.dataTransfer.dropEffect = 'move';
@@ -574,7 +741,23 @@ export const ExplorerApp = () => {
                       e.preventDefault();
                       e.stopPropagation();
                       setDragOverFolderId(null);
+                      if (!e.dataTransfer) return;
                       try {
+                        // Handle native OS files being dropped
+                        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                          const files = Array.from(e.dataTransfer.files);
+                          for (const file of files) {
+                            if (file.size > 5 * 1024 * 1024) {
+                              console.warn(`File ${file.name} is too large. Skipping.`);
+                              continue;
+                            }
+                            const destPath = `${fullPath}/${file.name}`;
+                            const content = await file.text();
+                            await vfs.writeFile(destPath, content, '/');
+                          }
+                          return;
+                        }
+
                         const raw = e.dataTransfer.getData(DRAG_MIME_TYPE);
                         if (!raw) return;
                         const payload: DragPayload = JSON.parse(raw);
@@ -623,7 +806,7 @@ export const ExplorerApp = () => {
                       getIconForFile(node.name)
                     )}
                   </div>
-                  <span className="w-full text-xs truncate group-hover:text-white">
+                  <span className="w-full text-xs break-all line-clamp-2 px-1 group-hover:text-white">
                     {node.name}
                   </span>
                 </div>
@@ -635,8 +818,8 @@ export const ExplorerApp = () => {
         
         {/* Marquee Overlay */}
         {marquee && (
-          <div
-            className="absolute bg-blue-500/20 border border-blue-400/50 pointer-events-none z-50"
+          <div 
+            className="absolute bg-blue-500/20 border border-blue-500 pointer-events-none"
             style={{
               left: Math.min(marquee.startX, marquee.currentX),
               top: Math.min(marquee.startY, marquee.currentY),
@@ -645,6 +828,7 @@ export const ExplorerApp = () => {
             }}
           />
         )}
+      </div>
       </div>
 
       {/* Status Bar */}

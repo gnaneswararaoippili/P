@@ -21,9 +21,14 @@ export const EditorApp = ({ args }: { args?: Record<string, any> }) => {
       try {
         const fileContent = await vfs.readFile(filePath, '/');
         if (isMounted) {
-          setContent(fileContent);
+          if (fileContent.length > 500000) { // Limit to ~500KB
+            setError('File is too large to open in the Text Editor.');
+            setContent('');
+          } else {
+            setContent(fileContent);
+            setError(null);
+          }
           setIsDirty(false);
-          setError(null);
         }
       } catch (err: any) {
         if (isMounted) {
