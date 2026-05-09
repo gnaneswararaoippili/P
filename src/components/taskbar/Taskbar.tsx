@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useProcesses } from '../../context/ProcessContext';
-import { LayoutGrid, Wifi, Battery, Volume2 } from 'lucide-react';
+import { LayoutGrid, Wifi, Battery, Volume2, X } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 import { AppRegistry } from '../../core/registry/AppRegistry';
 import { StartMenu } from './StartMenu';
+import { WorkspaceManager, type Workspace } from '../../core/workspace/WorkspaceManager';
+import { osEvents } from '../../core/events/EventBus';
 
 const getAppIcon = (id: string) => {
   const app = AppRegistry.getApp(id);
@@ -20,6 +22,25 @@ export const Taskbar = () => {
   const { processes, focusProcess, minimizeProcess, restoreProcess } = useProcesses();
   const [time, setTime] = useState(new Date());
   const [isStartMenuOpen, setIsStartMenuOpen] = useState(false);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>(WorkspaceManager.getWorkspaces());
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(WorkspaceManager.getActiveWorkspaceId());
+
+  useEffect(() => {
+    const handleWorkspaceChanged = (payload: { workspaces: Workspace[] }) => {
+      setWorkspaces(payload.workspaces);
+    };
+    const handleWorkspaceActiveChanged = (payload: { id: string }) => {
+      setActiveWorkspaceId(payload.id);
+    };
+
+    osEvents.on('workspace:changed', handleWorkspaceChanged);
+    osEvents.on('workspace:activeChanged', handleWorkspaceActiveChanged);
+
+    return () => {
+      osEvents.off('workspace:changed', handleWorkspaceChanged);
+      osEvents.off('workspace:activeChanged', handleWorkspaceActiveChanged);
+    };
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -56,9 +77,52 @@ export const Taskbar = () => {
         
         <div className="w-px h-6 bg-white/20 mx-1"></div>
 
+        {/* Workspace Switcher */}
+        <div className="flex gap-1 h-full items-center mr-2">
+          {workspaces.map((ws) => (
+            <div
+              key={ws.id}
+              onClick={() => WorkspaceManager.switchWorkspace(ws.id)}
+              className={cn(
+                "group relative h-6 px-3 text-xs flex items-center justify-center rounded-sm cursor-pointer transition-colors border",
+                activeWorkspaceId === ws.id 
+                  ? "bg-white/20 border-white/30 text-white" 
+                  : "bg-transparent border-transparent hover:bg-white/10 text-slate-300"
+              )}
+              title={ws.name}
+            >
+              <span className={cn("transition-transform duration-200", ws.id !== 'default' && "group-hover:-translate-x-2")}>
+                {ws.name}
+              </span>
+              
+              {ws.id !== 'default' && (
+                <div 
+                  className="absolute right-1 opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded-sm hover:bg-red-500 hover:text-white text-slate-300"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    WorkspaceManager.removeWorkspace(ws.id);
+                  }}
+                  title="Close Desktop"
+                >
+                  <X className="w-3 h-3" />
+                </div>
+              )}
+            </div>
+          ))}
+          <div 
+            onClick={() => WorkspaceManager.createWorkspace()}
+            className="h-6 w-6 flex items-center justify-center rounded-sm cursor-pointer hover:bg-white/10 text-slate-300 transition-colors"
+            title="New Desktop"
+          >
+            +
+          </div>
+        </div>
+
+        <div className="w-px h-6 bg-white/20 mx-1"></div>
+
         {/* Running Apps */}
         <div className="flex gap-1 h-full items-center">
-          {processes.map((process) => (
+          {processes.filter(p => p.workspaceId === activeWorkspaceId).map((process) => (
             <div
               key={process.id}
               onClick={() => handleTaskbarClick(process.id)}
@@ -70,7 +134,7 @@ export const Taskbar = () => {
               {process.isFocused && (
                 <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-4 h-1 bg-blue-400 rounded-t-md" />
               )}
-              {getAppIcon(process.id)}
+              {getAppIcon(process.appId || process.id)}
               <span className="text-sm truncate font-medium">{process.name}</span>
             </div>
           ))}

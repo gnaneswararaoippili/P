@@ -9,9 +9,10 @@ import { ExplorerApp } from '../../apps/explorer/ExplorerApp';
 import { EditorApp } from '../../apps/editor/EditorApp';
 import { TaskManagerApp } from '../../apps/taskmanager/TaskManagerApp';
 import { SettingsApp } from '../../apps/settings/SettingsApp';
+import { WorkspaceManager } from '../../core/workspace/WorkspaceManager';
 
 export const Window = ({ process }: { process: Process }) => {
-  const { closeProcess, minimizeProcess, focusProcess, updateProcessBounds } = useProcesses();
+  const { closeProcess, minimizeProcess, focusProcess, updateProcessBounds, activeWorkspaceId } = useProcesses();
 
   // Local render state — updated every animation frame during drag for 60fps
   const [localBounds, setLocalBounds] = useState({
@@ -181,10 +182,20 @@ export const Window = ({ process }: { process: Process }) => {
     renderLeft = '50vw'; renderTop = 0; renderW = '50vw'; renderH = 'calc(100vh - 3rem)';
   }
 
+  const isActiveWorkspace = process.workspaceId === activeWorkspaceId;
+  const workspaces = WorkspaceManager.getWorkspaces();
+  const activeIdx = workspaces.findIndex(w => w.id === activeWorkspaceId);
+  const processIdx = workspaces.findIndex(w => w.id === process.workspaceId);
+  
+  // Calculate horizontal offset for sliding animation
+  let xOffset = 0;
+  if (processIdx < activeIdx) xOffset = -100; // Slide left
+  else if (processIdx > activeIdx) xOffset = 100;  // Slide right
+
   return (
     <>
       {/* Snap Preview Overlay */}
-      {snapPreview && (
+      {snapPreview && isActiveWorkspace && (
         <div
           className="fixed z-30 bg-blue-500/20 border-2 border-blue-400/50 pointer-events-none rounded-xl"
           style={{
@@ -202,10 +213,19 @@ export const Window = ({ process }: { process: Process }) => {
           <motion.div
             key={process.id}
             initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
+            animate={{ 
+              opacity: isActiveWorkspace ? 1 : 0, 
+              scale: isActiveWorkspace ? 1 : 0.95,
+              x: `${xOffset}vw`,
+              pointerEvents: isActiveWorkspace ? 'auto' : 'none',
+            }}
             exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.12 }}
-            onMouseDown={() => focusProcess(process.id)}
+            transition={{ 
+              duration: 0.3, 
+              ease: [0.25, 1, 0.5, 1], // Custom spring-like easing for sliding
+              opacity: { duration: 0.2 } 
+            }}
+            onMouseDown={() => { if (isActiveWorkspace) focusProcess(process.id); }}
             style={{
               position: 'absolute',
               left: renderLeft,
@@ -213,7 +233,7 @@ export const Window = ({ process }: { process: Process }) => {
               width: renderW,
               height: renderH,
               zIndex: process.zIndex,
-              transition: isSpecialState && !isDraggingWindow.current
+              transition: isSpecialState && !isDraggingWindow.current && isActiveWorkspace
                 ? 'left 0.25s ease-out, top 0.25s ease-out, width 0.25s ease-out, height 0.25s ease-out'
                 : undefined,
             }}
@@ -276,15 +296,15 @@ export const Window = ({ process }: { process: Process }) => {
 
             {/* Window Content */}
             <div className="flex-1 flex flex-col overflow-hidden bg-slate-900/50 min-h-0">
-              {process.id === 'terminal' ? (
+              {(process.appId || process.id) === 'terminal' ? (
                 <TerminalApp pid={process.id} args={process.args} />
-              ) : process.id === 'explorer' ? (
+              ) : (process.appId || process.id) === 'explorer' ? (
                 <ExplorerApp />
-              ) : process.id === 'taskmanager' ? (
+              ) : (process.appId || process.id) === 'taskmanager' ? (
                 <TaskManagerApp />
-              ) : process.id === 'settings' ? (
+              ) : (process.appId || process.id) === 'settings' ? (
                 <SettingsApp />
-              ) : process.id.startsWith('editor') ? (
+              ) : (process.appId || process.id).startsWith('editor') ? (
                 <EditorApp args={process.args} />
               ) : (
                 <div className="p-4 text-white overflow-auto flex-1">
